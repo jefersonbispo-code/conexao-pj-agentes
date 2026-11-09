@@ -224,6 +224,14 @@ table.x td.num{font-size:12px}
 table.x thead th{font-size:11px}
 table.x td.name{max-width:190px;width:190px}
 .ctrl select{min-width:140px}
+.msel{position:relative;display:inline-block}
+.msel-btn{border:1px solid var(--line);background:var(--panel-2);border-radius:7px;padding:6px 28px 6px 10px;font-size:14px;color:var(--ink);min-width:170px;max-width:260px;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
+.msel-btn::after{content:"";position:absolute;right:10px;top:50%;margin-top:-2px;border:4px solid transparent;border-top-color:var(--muted)}
+.msel-list{position:absolute;z-index:40;top:calc(100% + 4px);left:0;min-width:260px;background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);padding:6px}
+.msel-list label{display:flex !important;flex-direction:row !important;justify-content:flex-start;white-space:nowrap;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:13px;cursor:pointer;color:var(--ink);text-transform:none;letter-spacing:0;font-weight:400;margin:0}
+.msel-list label:hover{background:var(--panel-2)}
+.msel-list .sep{display:block;height:0;border-top:1px solid var(--line);margin:4px 0}
+.msel-list input{width:auto;min-width:0;margin:0}
 /* ---- v10: filtros, abas, blocos altos, mapa ---- */
 .ctrl .ms > button{min-width:170px;text-align:left}
 .ctrl .clear{align-self:center}
@@ -369,7 +377,7 @@ table.ag tr.grp td{background:var(--soft,rgba(0,0,0,.03));border-top:1px solid v
       <label>até<select id="selDFim"></select></label>
       <label>Hora de<select id="selHIni"></select></label>
       <label>até<select id="selHFim"></select></label>
-      <label id="lblFila" class="hidden">Operação<select id="selFila"></select></label>
+      <label id="lblFila" class="hidden">Operação<span class="msel"><button type="button" class="msel-btn" id="btnFila">Todas</button><span class="msel-list hidden" id="lstFila"></span></span></label>
       <label>Supervisor<select id="selSup"></select></label>
       <label>Operador<select id="selOper"></select></label>
       <div class="seg" id="atalhos"><button data-p="dia">Último dia</button><button data-p="mes">Mês</button><button data-p="tudo">Tudo</button></div>
@@ -424,7 +432,7 @@ const toMeta = r => r ? { fileName:r.arquivo, rows:r.linhas, updatedAt:r.atualiz
 
 /* ================= HORA A HORA C6 CONEXAO PJ ================= */
 /* ================= ACOMPANHAMENTO DE AGENTES - C6 CONEXAO PJ ================= */
-const S = { B:null, P:[], T:[], meta:null, loadedAsset:null, datas:[], dIni:"", dFim:"", hIni:0, hFim:23, sup:"", oper:"", fila:"", filas:[], view:"prod", sort:{}, pausaModo:"medio" };
+const S = { B:null, P:[], T:[], meta:null, loadedAsset:null, datas:[], dIni:"", dFim:"", hIni:0, hFim:23, sup:"", oper:"", filasSel:[], filas:[], view:"prod", sort:{}, pausaModo:"medio" };
 const fD = iso => iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : "–";
 const fHMS = s => { if (!isFinite(s)) return "–"; s = Math.round(s); const p2 = x => String(x).padStart(2, "0"); return p2(Math.floor(s / 3600)) + ":" + p2(Math.floor(s % 3600 / 60)) + ":" + p2(s % 60); };
 const fMS = s => { if (!isFinite(s)) return "–"; s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
@@ -497,8 +505,9 @@ const encLen = enc => enc && enc.base ? enc.base.length : 0;
    entram so os operadores que atenderam aquela fila no dia, com o tempo do dia inteiro. */
 const semAc = v => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
 function aplicarFila(){
-  if (!S.fila){ S.B = S.B0; S.P = S.P0; S.T = S.T0; return; }
-  S.T = S.T0.filter(r => r.OP === S.fila);
+  if (!S.filasSel.length){ S.B = S.B0; S.P = S.P0; S.T = S.T0; return; }
+  const sel = new Set(S.filasSel);
+  S.T = S.T0.filter(r => sel.has(r.OP));
   const prod = new Map(), ativos = new Set();
   S.T.forEach(r => { const k = r.D + "|" + r.H + "|" + r.L; ativos.add(r.D + "|" + r.L);
     const a = prod.get(k) || { AT:0, TEL:0, AG:0, TA:0, CPC:0, V:0, TF:0 };
@@ -517,7 +526,7 @@ function aplicarFila(){
 function load(enc, meta){
   S.B0 = enc.base || []; S.P0 = enc.pausas || []; S.T0 = enc.tab || []; S.meta = meta || S.meta;
   S.filas = Array.from(new Set(S.T0.map(r => r.OP).filter(Boolean))).sort();
-  if (S.fila && !S.filas.includes(S.fila)) S.fila = "";
+  S.filasSel = S.filasSel.filter(f => S.filas.includes(f));
   aplicarFila();
   const prev = S.datas.length ? { ini:S.dIni, fim:S.dFim, ult:S.datas[S.datas.length - 1] } : null;
   S.datas = Array.from(new Set(S.B0.map(r => r.D))).sort();
@@ -550,7 +559,7 @@ function buildControls(){
   const ho = hs.map(h => '<option value="' + h + '">' + h + "h</option>").join("");
   $("#selHIni").innerHTML = ho; $("#selHIni").value = S.hIni; $("#selHFim").innerHTML = ho; $("#selHFim").value = S.hFim;
   $("#lblFila").classList.toggle("hidden", !S.filas.length);
-  $("#selFila").innerHTML = opts(S.filas, S.fila, "Todas");
+  montaFilas();
   buildPessoas();
 }
 function buildPessoas(){
@@ -570,7 +579,22 @@ $("#atalhos").onclick = e => { const b = e.target.closest("button"); if (!b || !
   S.dFim = ult; S.dIni = b.dataset.p === "dia" ? ult : b.dataset.p === "mes" ? (S.datas.find(d => d.slice(0, 7) === ult.slice(0, 7)) || ult) : S.datas[0];
   $("#selDIni").value = S.dIni; $("#selDFim").value = S.dFim; buildPessoas(); refresh(); };
 $("#selSup").onchange = e => { S.sup = e.target.value; buildPessoas(); refresh(); };
-$("#selFila").onchange = e => { S.fila = e.target.value; aplicarFila(); buildPessoas(); renderMeta(); refresh(); };
+/* operacao: selecao de varias (vazio = todas) */
+function montaFilas(){
+  const sel = new Set(S.filasSel), nome = f => f.replace(/^CONEXAO_PJ_/, "").replace(/_/g, " ");
+  $("#lstFila").innerHTML = '<label><input type="checkbox" data-f="*"' + (!sel.size ? " checked" : "") + '> Todas</label><div class="sep"></div>'
+    + S.filas.map(f => '<label><input type="checkbox" data-f="' + esc(f) + '"' + (sel.has(f) ? " checked" : "") + '> ' + esc(f) + '</label>').join("");
+  $("#btnFila").textContent = !sel.size ? "Todas" : sel.size === 1 ? nome(S.filasSel[0]) : sel.size + " operações";
+  $("#btnFila").title = !sel.size ? "Todas as operações" : S.filasSel.join(", ");
+}
+$("#btnFila").onclick = e => { e.stopPropagation(); $("#lstFila").classList.toggle("hidden"); };
+$("#lstFila").onclick = e => e.stopPropagation();
+$("#lstFila").onchange = e => { const f = e.target.dataset.f; if (!f) return;
+  if (f === "*") S.filasSel = [];
+  else { const set = new Set(S.filasSel); e.target.checked ? set.add(f) : set.delete(f);
+         S.filasSel = S.filas.filter(x => set.has(x)); if (S.filasSel.length === S.filas.length) S.filasSel = []; }
+  montaFilas(); aplicarFila(); buildPessoas(); renderMeta(); refresh(); };
+document.addEventListener("click", () => $("#lstFila").classList.add("hidden"));
 $("#selOper").onchange = e => { S.oper = e.target.value; refresh(); };
 $("#tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; S.view = b.dataset.t; document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b)); refresh(); };
 
