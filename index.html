@@ -741,11 +741,6 @@ $("#btnXlsx").onclick = () => {
     "% Conversão":isFinite(a.CONV) ? a.CONV : 0, "TMA (s)":Math.round(a.TMA) || 0, "TMA produtivo (s)":Math.round(a.TMAP) || 0, "Tempo logado (s)":a.LOG, "Tempo pausa (s)":a.PAU, "% pausa":isFinite(a.PPAU) ? a.PPAU : 0,
     "TM pausa (s)":Math.round(a.TMPAU) || 0, "Tempo ocioso (s)":a.OCI, "TM ocioso (s)":Math.round(a.TMOCI) || 0, Zerado:ehZerado(a) ? "SIM" : "" }));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(out), "Operadores");
-  /* tabulacoes detalhadas por operador (mesmo filtro da tela) */
-  const tg = new Map(); S.T.filter(r => filtro(r)).forEach(r => { const k = r.O + "|" + r.TB; const x = tg.get(k) || { Operador:r.O, Supervisor:r.S, Tipo:r.TP, "Tabulação":r.TB, Atendidas:0, tf:0 }; x.Atendidas += r.Q; x.tf += r.TF; tg.set(k, x); });
-  const tabs = Array.from(tg.values()).map(x => ({ Operador:x.Operador, Supervisor:x.Supervisor, Tipo:x.Tipo, "Tabulação":x["Tabulação"], Atendidas:x.Atendidas, "TMA (s)":x.Atendidas ? Math.round(x.tf / x.Atendidas) : 0 }))
-    .sort((a, b) => a.Operador.localeCompare(b.Operador, "pt-BR") || b.Atendidas - a.Atendidas);
-  if (tabs.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tabs), "Tabulações");
   /* detalhe por tabulacao e por pausa (mesmo filtro da tela) */
   const tb = new Map(); S.T.filter(r => filtro(r)).forEach(r => { const k = r.O + "|" + r.TB; const x = tb.get(k) || { Operador:r.O, Supervisor:r.S, Tipo:r.TP, "Tabulação":r.TB, Quantidade:0, tf:0 }; x.Quantidade += r.Q; x.tf += r.TF; tb.set(k, x); });
   const tabRows = Array.from(tb.values()).map(x => { const at = (ops.find(a => a.k === x.Operador) || {}).AT || 0;
@@ -754,7 +749,12 @@ $("#btnXlsx").onclick = () => {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tabRows), "Tabulações");
   const pz = new Map(); S.P.filter(r => filtro(r)).forEach(r => { const k = r.O + "|" + r.M; const x = pz.get(k) || { Operador:r.O, Supervisor:r.S, Motivo:r.M, Pausas:0, "Tempo (s)":0 }; x.Pausas += r.Q; x["Tempo (s)"] += r.SEG; pz.set(k, x); });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Array.from(pz.values())), "Pausas");
-  XLSX.writeFile(wb, "Agentes_ConexaoPJ_" + S.dIni + "_a_" + S.dFim + ".xlsx");
+  /* filtros aplicados (inclui as operacoes escolhidas) */
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
+    { Filtro:"Período", Valor:S.dIni + " a " + S.dFim }, { Filtro:"Horas", Valor:S.hIni + "h a " + S.hFim + "h" },
+    { Filtro:"Operação", Valor:S.filasSel.length ? S.filasSel.join(", ") : "Todas" },
+    { Filtro:"Supervisor", Valor:S.sup || "Todos" }, { Filtro:"Operador", Valor:S.oper || "Todos" } ]), "Filtros");
+  XLSX.writeFile(wb, "Agentes_ConexaoPJ_" + S.dIni + "_a_" + S.dFim + (S.filasSel.length ? "_" + S.filasSel.length + "op" : "") + ".xlsx");
 };
 
 /* ================= ARQUIVO / SUPABASE ================= */
