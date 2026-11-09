@@ -350,7 +350,7 @@ table.ag tr.grp td{background:var(--soft,rgba(0,0,0,.03));border-top:1px solid v
     </div>
     <div class="actions">
       <div class="meta" id="meta">Nenhuma base carregada</div>
-      <input type="file" id="file" accept=".xlsx,.xls,.csv,.txt" hidden>
+      <input type="file" id="file" accept=".xlsx,.xls,.csv,.txt" multiple hidden>
       <button class="btn primary hidden" id="btnUp">Atualizar base</button>
       <button class="btn ghost hidden" id="btnLocal">Abrir arquivo</button>
       <button class="btn ghost" id="btnLogin">Entrar</button>
@@ -369,6 +369,7 @@ table.ag tr.grp td{background:var(--soft,rgba(0,0,0,.03));border-top:1px solid v
       <label>até<select id="selDFim"></select></label>
       <label>Hora de<select id="selHIni"></select></label>
       <label>até<select id="selHFim"></select></label>
+      <label id="lblFila" class="hidden">Operação<select id="selFila"></select></label>
       <label>Supervisor<select id="selSup"></select></label>
       <label>Operador<select id="selOper"></select></label>
       <div class="seg" id="atalhos"><button data-p="dia">Último dia</button><button data-p="mes">Mês</button><button data-p="tudo">Tudo</button></div>
@@ -423,15 +424,19 @@ const toMeta = r => r ? { fileName:r.arquivo, rows:r.linhas, updatedAt:r.atualiz
 
 /* ================= HORA A HORA C6 CONEXAO PJ ================= */
 /* ================= ACOMPANHAMENTO DE AGENTES - C6 CONEXAO PJ ================= */
-const S = { B:null, P:[], T:[], meta:null, loadedAsset:null, datas:[], dIni:"", dFim:"", hIni:0, hFim:23, sup:"", oper:"", view:"prod", sort:{}, pausaModo:"medio" };
+const S = { B:null, P:[], T:[], meta:null, loadedAsset:null, datas:[], dIni:"", dFim:"", hIni:0, hFim:23, sup:"", oper:"", fila:"", filas:[], view:"prod", sort:{}, pausaModo:"medio" };
 const fD = iso => iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : "–";
 const fHMS = s => { if (!isFinite(s)) return "–"; s = Math.round(s); const p2 = x => String(x).padStart(2, "0"); return p2(Math.floor(s / 3600)) + ":" + p2(Math.floor(s % 3600 / 60)) + ":" + p2(s % 60); };
 const fMS = s => { if (!isFinite(s)) return "–"; s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
 
 /* ================= LEITURA ================= */
 const normKey = k => String(k).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\u00a0/g, " ").trim().toUpperCase().replace(/\s+/g, "_");
-const num = v => { if (v == null || v === "") return 0; if (typeof v === "number") return v; const n = Number(String(v).replace(/\./g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+/* numero; celula formatada como data/hora no Excel volta ao valor original (serial) */
+const num = v => { if (v == null || v === "") return 0; if (typeof v === "number") return v;
+  if (v instanceof Date && !isNaN(v)) return Math.round(((v.getTime() - v.getTimezoneOffset() * 60000 - Date.UTC(1899, 11, 30)) / 864e5) * 1e6) / 1e6; const n = Number(String(v).replace(/\./g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
 const clean = v => v == null ? "" : String(v).replace(/\u00a0/g, " ").trim();
+/* login igual nas 3 abas, venha como numero ou texto (tira ".0" e zeros a esquerda de login numerico) */
+const loginKey = v => { let t = clean(v).replace(/\.0+$/, ""); if (/^\d+$/.test(t)) t = t.replace(/^0+(?=\d)/, ""); return t; };
 function isoDate(v){
   if (v == null || v === "") return "";
   if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -448,40 +453,81 @@ function nomeMotivo(mot, cod){
   if (m && !/^MOTIVO\s+\d+$/i.test(m)) return m;
   return MOTIVOS[+c] || ("Motivo " + c);
 }
-async function readFile(file){
-  const wb = XLSX.read(await file.arrayBuffer(), { type:"array", cellDates:true });
+async function readFile(arg){
+  const files = Array.isArray(arg) ? arg : [arg];
   const out = { base:null, pausas:null, tab:null };
-  for (const sn of wb.SheetNames){
-    const r = XLSX.utils.sheet_to_json(wb.Sheets[sn], { defval:null, raw:true });
-    if (!r.length) continue;
-    const k = Object.keys(r[0]).map(normKey);
-    if (k.includes("LOGADO_SEG") && k.includes("ATENDIDAS")) out.base = r;
-    else if (k.includes("REASON") || k.includes("MOTIVO")) out.pausas = r;
-    else if (k.includes("TABULACAO") && k.includes("QTD")) out.tab = r;
+  for (const file of files){
+    let wb;
+    if (/\.(csv|txt)$/i.test(file.name)){
+      /* CSV do job: UTF-8 com BOM e separador ";" */
+      const txt = (await file.text()).replace(/^\uFEFF/, "");
+      wb = XLSX.read(txt, { type:"string", FS:txt.split("\n")[0].includes(";") ? ";" : ",", raw:true });
+    } else wb = XLSX.read(await file.arrayBuffer(), { type:"array", cellDates:true });
+    for (const sn of wb.SheetNames){
+      const r = XLSX.utils.sheet_to_json(wb.Sheets[sn], { defval:null, raw:true });
+      if (!r.length) continue;
+      const k = Object.keys(r[0]).map(normKey);
+      if (k.includes("LOGADO_SEG") && k.includes("ATENDIDAS")) out.base = r;
+      else if (k.includes("REASON") || k.includes("MOTIVO")) out.pausas = r;
+      else if (k.includes("TABULACAO") && k.includes("QTD")) out.tab = r;
+    }
   }
-  if (!out.base) throw new Error("Não encontrei a aba BASE (colunas ATENDIDAS e LOGADO_SEG). Cole os 3 resultados da query em abas separadas.");
+  if (!out.base) throw new Error("Não encontrei a BASE (colunas ATENDIDAS e LOGADO_SEG). Envie o Excel com as 3 abas ou selecione juntos os 3 CSV do job (Agentes_BASE, Agentes_PAUSAS e Agentes_TAB).");
   return out;
 }
 function encode(l){
   const pega = (rows, f) => { if (!rows) return []; const km = {}; Object.keys(rows[0]).forEach(k => km[normKey(k)] = k); const g = n => km[n] ? rows : null;
     return rows.map(r => f(r, n => km[n] != null ? r[km[n]] : null)).filter(Boolean); };
   const base = pega(l.base, (r, g) => { const d = isoDate(g("DATA")); if (!d) return null;
-    return { D:d, H:num(g("HORA")), L:clean(g("LOGIN")), O:clean(g("OPERADOR")), S:clean(g("SUPERVISOR")) || "SEM SUPERVISOR",
+    return { D:d, H:num(g("HORA")), L:loginKey(g("LOGIN")), O:clean(g("OPERADOR")), S:clean(g("SUPERVISOR")) || "SEM SUPERVISOR",
       AT:num(g("ATENDIDAS")), TEL:num(g("TELEFONIA")), AG:num(g("AGENDAMENTO")), TA:num(g("TAB_AUTOMATICA")), CPC:num(g("CPC")), V:num(g("VENDAS")),
       TF:num(g("TEMPO_FALADO_SEG")), LOG:num(g("LOGADO_SEG")), PAU:num(g("PAUSA_SEG")), OCI:num(g("OCIOSO_SEG")) }; });
   const pausas = pega(l.pausas, (r, g) => { const d = isoDate(g("DATA")); if (!d) return null;
-    return { D:d, H:num(g("HORA")), L:clean(g("LOGIN")), O:clean(g("OPERADOR")), S:clean(g("SUPERVISOR")) || "SEM SUPERVISOR",
+    return { D:d, H:num(g("HORA")), L:loginKey(g("LOGIN")), O:clean(g("OPERADOR")), S:clean(g("SUPERVISOR")) || "SEM SUPERVISOR",
       M:nomeMotivo(g("MOTIVO"), g("REASON")), SEG:num(g("PAUSA_SEG")), Q:num(g("QTD_PAUSAS")) }; });
   const tab = pega(l.tab, (r, g) => { const d = isoDate(g("DATA")); if (!d) return null;
-    return { D:d, H:num(g("HORA")), L:clean(g("LOGIN")), O:clean(g("OPERADOR")), S:clean(g("SUPERVISOR")) || "SEM SUPERVISOR",
-      TP:clean(g("TIPO")), TB:clean(g("TABULACAO")), Q:num(g("QTD")), TF:num(g("TEMPO_FALADO_SEG")) }; });
+    return { D:d, H:num(g("HORA")), L:loginKey(g("LOGIN")), O:clean(g("OPERADOR")), S:clean(g("SUPERVISOR")) || "SEM SUPERVISOR",
+      TP:clean(g("TIPO")), TB:clean(g("TABULACAO")), Q:num(g("QTD")), TF:num(g("TEMPO_FALADO_SEG")), OP:clean(g("OPERACAO")).toUpperCase() }; });
   return { v:"a1", base, pausas, tab };
 }
 const encLen = enc => enc && enc.base ? enc.base.length : 0;
+/* ================= FILTRO DE FILA =================
+   A producao (atendidas, CPC, vendas, tabulacoes) vem da TAB, que tem a fila (OPERACAO).
+   Tempo logado, pausa e ocioso sao do operador (nao tem fila): com uma fila escolhida,
+   entram so os operadores que atenderam aquela fila no dia, com o tempo do dia inteiro. */
+const semAc = v => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+function aplicarFila(){
+  if (!S.fila){ S.B = S.B0; S.P = S.P0; S.T = S.T0; return; }
+  S.T = S.T0.filter(r => r.OP === S.fila);
+  const prod = new Map(), ativos = new Set();
+  S.T.forEach(r => { const k = r.D + "|" + r.H + "|" + r.L; ativos.add(r.D + "|" + r.L);
+    const a = prod.get(k) || { AT:0, TEL:0, AG:0, TA:0, CPC:0, V:0, TF:0 };
+    const tp = semAc(r.TP), tb = semAc(r.TB);
+    a.AT += r.Q; a.TF += r.TF;
+    if (tp === "TELEFONIA") a.TEL += r.Q;
+    if (tb === "AGENDAMENTO PRIVADO" || tb === "AGENDAMENTO PUBLICO") a.AG += r.Q;
+    if (tb === "TABULACAO AUTOMATICA") a.TA += r.Q;
+    if (tp === "INELEGIVEL" || tp === "SUCESSO" || tp === "NAO TEM INTERESSE") a.CPC += r.Q;
+    if (tp === "SUCESSO") a.V += r.Q;
+    prod.set(k, a); });
+  const zero = { AT:0, TEL:0, AG:0, TA:0, CPC:0, V:0, TF:0 };
+  S.B = S.B0.filter(r => ativos.has(r.D + "|" + r.L)).map(r => Object.assign({}, r, prod.get(r.D + "|" + r.H + "|" + r.L) || zero));
+  S.P = S.P0.filter(r => ativos.has(r.D + "|" + r.L));
+}
 function load(enc, meta){
-  S.B = enc.base || []; S.P = enc.pausas || []; S.T = enc.tab || []; S.meta = meta || S.meta;
-  S.datas = Array.from(new Set(S.B.map(r => r.D))).sort();
-  S.dFim = S.datas[S.datas.length - 1] || ""; S.dIni = S.dFim;
+  S.B0 = enc.base || []; S.P0 = enc.pausas || []; S.T0 = enc.tab || []; S.meta = meta || S.meta;
+  S.filas = Array.from(new Set(S.T0.map(r => r.OP).filter(Boolean))).sort();
+  if (S.fila && !S.filas.includes(S.fila)) S.fila = "";
+  aplicarFila();
+  const prev = S.datas.length ? { ini:S.dIni, fim:S.dFim, ult:S.datas[S.datas.length - 1] } : null;
+  S.datas = Array.from(new Set(S.B0.map(r => r.D))).sort();
+  const ult = S.datas[S.datas.length - 1] || "";
+  if (!prev){ S.dFim = ult; S.dIni = ult; }
+  else {   /* mantem o periodo escolhido; quem estava no ultimo dia acompanha o dia novo */
+    const seguia = prev.fim === prev.ult;
+    S.dFim = seguia ? ult : (S.datas.includes(prev.fim) ? prev.fim : ult);
+    S.dIni = seguia && prev.ini === prev.fim ? ult : (S.datas.includes(prev.ini) ? prev.ini : S.dFim);
+  }
   $("#emptyState").classList.add("hidden"); $("#main").classList.remove("hidden");
   buildControls(); renderMeta(); refresh();
 }
@@ -489,7 +535,7 @@ function renderMeta(){
   if (!S.B){ $("#meta").textContent = "Nenhuma base carregada"; return; }
   const m = S.meta, when = m && m.updatedAt ? new Date(m.updatedAt).toLocaleString("pt-BR", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" }) : null;
   const ult = S.B.filter(r => r.D === S.dFim).reduce((a, r) => Math.max(a, r.H), 0);
-  $("#meta").innerHTML = (when ? "Atualizado em <b>" + esc(when) + "</b><br>" : "<b>Somente nesta tela</b><br>") + "Dados até " + fD(S.datas[S.datas.length - 1]) + " · " + ult + "h";
+  $("#meta").innerHTML = (when ? "Atualizado em <b>" + esc(when) + "</b><br>" : "<b>Somente nesta tela</b><br>") + "Dados até " + fD(S.datas[S.datas.length - 1]) + " · " + ult + "h" + (logged ? '<br><span style="opacity:.75">Atualização automática ligada</span>' : "");
 }
 
 /* ================= FILTROS ================= */
@@ -497,10 +543,14 @@ function opts(list, sel, todos){ return (todos ? '<option value="">' + todos + '
 function buildControls(){
   const dl = S.datas.map(d => '<option value="' + d + '">' + fD(d) + "/" + d.slice(0, 4) + "</option>").join("");
   $("#selDIni").innerHTML = dl; $("#selDIni").value = S.dIni; $("#selDFim").innerHTML = dl; $("#selDFim").value = S.dFim;
-  const hs = Array.from(new Set(S.B.map(r => r.H))).sort((a, b) => a - b);
-  if (hs.length){ S.hIni = Math.max(S.hIni, hs[0]); S.hFim = Math.min(S.hFim, hs[hs.length - 1]); if (S.hIni > S.hFim){ S.hIni = hs[0]; S.hFim = hs[hs.length - 1]; } }
+  const hs = Array.from(new Set((S.B0 || S.B).map(r => r.H))).sort((a, b) => a - b);
+  if (hs.length){ const hmax = hs[hs.length - 1];
+    if (S.hFimAuto !== false) S.hFim = hmax; else S.hFim = Math.min(S.hFim, hmax);
+    S.hIni = Math.max(S.hIni, hs[0]); if (S.hIni > S.hFim){ S.hIni = hs[0]; S.hFim = hmax; } S.hMax = hmax; }
   const ho = hs.map(h => '<option value="' + h + '">' + h + "h</option>").join("");
   $("#selHIni").innerHTML = ho; $("#selHIni").value = S.hIni; $("#selHFim").innerHTML = ho; $("#selHFim").value = S.hFim;
+  $("#lblFila").classList.toggle("hidden", !S.filas.length);
+  $("#selFila").innerHTML = opts(S.filas, S.fila, "Todas");
   buildPessoas();
 }
 function buildPessoas(){
@@ -515,11 +565,12 @@ function buildPessoas(){
 $("#selDIni").onchange = e => { S.dIni = e.target.value; if (S.dFim < S.dIni){ S.dFim = S.dIni; $("#selDFim").value = S.dFim; } buildPessoas(); refresh(); };
 $("#selDFim").onchange = e => { S.dFim = e.target.value; if (S.dIni > S.dFim){ S.dIni = S.dFim; $("#selDIni").value = S.dIni; } buildPessoas(); refresh(); };
 $("#selHIni").onchange = e => { S.hIni = +e.target.value; if (S.hFim < S.hIni){ S.hFim = S.hIni; $("#selHFim").value = S.hFim; } refresh(); };
-$("#selHFim").onchange = e => { S.hFim = +e.target.value; if (S.hIni > S.hFim){ S.hIni = S.hFim; $("#selHIni").value = S.hIni; } refresh(); };
+$("#selHFim").onchange = e => { S.hFim = +e.target.value; S.hFimAuto = S.hFim >= (S.hMax || 0); if (S.hIni > S.hFim){ S.hIni = S.hFim; $("#selHIni").value = S.hIni; } refresh(); };
 $("#atalhos").onclick = e => { const b = e.target.closest("button"); if (!b || !S.datas.length) return; const ult = S.datas[S.datas.length - 1];
   S.dFim = ult; S.dIni = b.dataset.p === "dia" ? ult : b.dataset.p === "mes" ? (S.datas.find(d => d.slice(0, 7) === ult.slice(0, 7)) || ult) : S.datas[0];
   $("#selDIni").value = S.dIni; $("#selDFim").value = S.dFim; buildPessoas(); refresh(); };
 $("#selSup").onchange = e => { S.sup = e.target.value; buildPessoas(); refresh(); };
+$("#selFila").onchange = e => { S.fila = e.target.value; aplicarFila(); buildPessoas(); renderMeta(); refresh(); };
 $("#selOper").onchange = e => { S.oper = e.target.value; refresh(); };
 $("#tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; S.view = b.dataset.t; document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b)); refresh(); };
 
@@ -663,17 +714,31 @@ $("#btnXlsx").onclick = () => {
   if (!S.B) return;
   const ops = porOperador();
   const out = ops.map(a => ({ Operador:a.k, Supervisor:a.S, Atendidas:a.AT, Telefonia:a.TEL, Agendamento:a.AG, "Tab. automática":a.TA, CPC:a.CPC, Vendas:a.V,
-    "% Conversão":a.CONV, "TMA (s)":Math.round(a.TMA) || 0, "TMA produtivo (s)":Math.round(a.TMAP) || 0, "Tempo logado (s)":a.LOG, "Tempo pausa (s)":a.PAU, "% pausa":a.PPAU,
+    "% Conversão":isFinite(a.CONV) ? a.CONV : 0, "TMA (s)":Math.round(a.TMA) || 0, "TMA produtivo (s)":Math.round(a.TMAP) || 0, "Tempo logado (s)":a.LOG, "Tempo pausa (s)":a.PAU, "% pausa":isFinite(a.PPAU) ? a.PPAU : 0,
     "TM pausa (s)":Math.round(a.TMPAU) || 0, "Tempo ocioso (s)":a.OCI, "TM ocioso (s)":Math.round(a.TMOCI) || 0, Zerado:ehZerado(a) ? "SIM" : "" }));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(out), "Operadores");
+  /* tabulacoes detalhadas por operador (mesmo filtro da tela) */
+  const tg = new Map(); S.T.filter(r => filtro(r)).forEach(r => { const k = r.O + "|" + r.TB; const x = tg.get(k) || { Operador:r.O, Supervisor:r.S, Tipo:r.TP, "Tabulação":r.TB, Atendidas:0, tf:0 }; x.Atendidas += r.Q; x.tf += r.TF; tg.set(k, x); });
+  const tabs = Array.from(tg.values()).map(x => ({ Operador:x.Operador, Supervisor:x.Supervisor, Tipo:x.Tipo, "Tabulação":x["Tabulação"], Atendidas:x.Atendidas, "TMA (s)":x.Atendidas ? Math.round(x.tf / x.Atendidas) : 0 }))
+    .sort((a, b) => a.Operador.localeCompare(b.Operador, "pt-BR") || b.Atendidas - a.Atendidas);
+  if (tabs.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tabs), "Tabulações");
+  /* detalhe por tabulacao e por pausa (mesmo filtro da tela) */
+  const tb = new Map(); S.T.filter(r => filtro(r)).forEach(r => { const k = r.O + "|" + r.TB; const x = tb.get(k) || { Operador:r.O, Supervisor:r.S, Tipo:r.TP, "Tabulação":r.TB, Quantidade:0, tf:0 }; x.Quantidade += r.Q; x.tf += r.TF; tb.set(k, x); });
+  const tabRows = Array.from(tb.values()).map(x => { const at = (ops.find(a => a.k === x.Operador) || {}).AT || 0;
+    return { Operador:x.Operador, Supervisor:x.Supervisor, Tipo:x.Tipo, "Tabulação":x["Tabulação"], Quantidade:x.Quantidade,
+             "% das atendidas do operador":at ? x.Quantidade / at : 0, "TMA (s)":x.Quantidade ? Math.round(x.tf / x.Quantidade) : 0 }; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tabRows), "Tabulações");
+  const pz = new Map(); S.P.filter(r => filtro(r)).forEach(r => { const k = r.O + "|" + r.M; const x = pz.get(k) || { Operador:r.O, Supervisor:r.S, Motivo:r.M, Pausas:0, "Tempo (s)":0 }; x.Pausas += r.Q; x["Tempo (s)"] += r.SEG; pz.set(k, x); });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Array.from(pz.values())), "Pausas");
   XLSX.writeFile(wb, "Agentes_ConexaoPJ_" + S.dIni + "_a_" + S.dFim + ".xlsx");
 };
 
 /* ================= ARQUIVO / SUPABASE ================= */
 async function handleFile(file, persist){
   if (!file) return;
+  const nome = Array.isArray(file) ? file.map(f => f.name).join(" + ") : file.name;
   try {
-    toast("Lendo " + file.name + "…");
+    toast("Lendo " + nome + "…");
     const enc = encode(await readFile(file)); if (!encLen(enc)) throw new Error("O arquivo não tem linhas.");
     if (persist && logged && sb){
       toast("Publicando a base…");
@@ -681,7 +746,7 @@ async function handleFile(file, persist){
       const upr = await sb.storage.from(BUCKET).upload(path, new Blob([body], { type:"application/json" }), { contentType:"application/json", cacheControl:"31536000", upsert:false });
       if (upr.error) throw upr.error;
       const prev = S.meta && S.meta.path;
-      const mr = await sb.from("painel_base_meta").upsert({ painel:PAINEL, arquivo:file.name, linhas:encLen(enc), storage_path:path, tamanho_bytes:body.length, atualizado_em:new Date().toISOString() }).select().single();
+      const mr = await sb.from("painel_base_meta").upsert({ painel:PAINEL, arquivo:nome, linhas:encLen(enc), storage_path:path, tamanho_bytes:body.length, atualizado_em:new Date().toISOString() }).select().single();
       if (mr.error){ await sb.storage.from(BUCKET).remove([path]); throw mr.error; }
       S.loadedAsset = path; load(enc, toMeta(mr.data));
       if (prev && prev !== path) sb.storage.from(BUCKET).remove([prev]).catch(() => {});
@@ -693,7 +758,7 @@ async function handleFile(file, persist){
 let persistNext = false;
 $("#btnUp").onclick = () => { persistNext = true; $("#file").click(); };
 $("#btnLocal").onclick = () => { persistNext = false; $("#file").click(); };
-$("#file").onchange = e => handleFile(e.target.files[0], persistNext);
+$("#file").onchange = e => { const fs = Array.from(e.target.files || []); e.target.value = ""; handleFile(fs.length > 1 ? fs : fs[0], persistNext); };
 $("#btnTheme").onclick = () => { const r = document.documentElement; const dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = dark ? "light" : "dark"; try { localStorage.setItem("c6pj-theme", r.dataset.theme); } catch(_){} refresh(); };
 try { const th = localStorage.getItem("c6pj-theme"); if (th) document.documentElement.dataset.theme = th; } catch(_){}
@@ -797,7 +862,9 @@ $("#btnLogout").onclick = () => sb.auth.signOut();
     showEmpty("Abra a base", '<p style="color:var(--muted)">Sem conexão com o Supabase: use <b>Abrir arquivo</b> para ver a base só nesta tela.</p>'); return; }
   sb.auth.onAuthStateChange((ev, session) => { if (ev === "SIGNED_IN" || ev === "SIGNED_OUT") setTimeout(() => aoLogar(session), 0); });
   const { data } = await sb.auth.getSession(); await aoLogar(data && data.session);
-  setInterval(() => { if (logged && document.visibilityState === "visible") syncBase(true); }, 2 * 60 * 1000);
+  /* atualizacao automatica: a cada 1 min com a aba visivel e assim que a aba volta a ficar visivel */
+  setInterval(() => { if (logged && document.visibilityState === "visible") syncBase(true); }, 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if (logged && document.visibilityState === "visible") syncBase(true); });
 })();
 })();
 </script>
